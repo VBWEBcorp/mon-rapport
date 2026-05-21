@@ -307,13 +307,20 @@
   margin-bottom: 0.5rem;
 }
 .prose-vbweb p {
-  font-size: 1rem;
+  font-size: 1.0625rem;
   line-height: 1.7;
   color: oklch(0.18 0.02 240 / 0.9);
   margin-bottom: 1rem;
 }
 .prose-vbweb p:last-child {
   margin-bottom: 0;
+}
+/* Synthese : typo encore un cran au-dessus (lecture longue/dense) */
+[data-doc-type='synthese'] .prose-vbweb p,
+[data-doc-type='synthese'] .prose-vbweb ul > li,
+[data-doc-type='synthese'] .prose-vbweb ol > li,
+[data-doc-type='synthese'] .prose-vbweb blockquote {
+  font-size: 1.125rem;
 }
 .prose-vbweb strong {
   font-weight: 600;
@@ -330,7 +337,7 @@
 .prose-vbweb ul > li {
   position: relative;
   padding-left: 1.5rem;
-  font-size: 1rem;
+  font-size: 1.0625rem;
   line-height: 1.65;
   color: oklch(0.18 0.02 240 / 0.9);
   margin-bottom: 0.5rem;
@@ -352,7 +359,7 @@
   margin-bottom: 1.25rem;
 }
 .prose-vbweb ol > li {
-  font-size: 1rem;
+  font-size: 1.0625rem;
   line-height: 1.65;
   color: oklch(0.18 0.02 240 / 0.9);
   margin-bottom: 0.5rem;
@@ -368,7 +375,7 @@
   padding: 1.25rem 1.5rem;
   border-radius: 0.75rem;
   font-style: italic;
-  font-size: 1rem;
+  font-size: 1.0625rem;
   line-height: 1.65;
   box-shadow: 0 2px 8px oklch(0.2 0.02 240 / 0.04);
 }
@@ -535,6 +542,42 @@
   float: left;
   height: 0;
   pointer-events: none;
+}
+
+/* Images collees/inserees dans l editeur : alignement via data-align,
+   largeur via attribut width="X%". Defaut : centre 100%. */
+.prose-vbweb img,
+.prose-vbweb .tiptap-image {
+  display: block;
+  margin-top: 2rem;
+  margin-bottom: 2rem;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.75rem;
+  border: 1px solid oklch(0.92 0.005 240 / 0.6);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+.prose-vbweb img:not([width]) {
+  width: 100%;
+}
+.prose-vbweb img[data-align='left'] {
+  margin-left: 0;
+  margin-right: auto;
+}
+.prose-vbweb img[data-align='right'] {
+  margin-left: auto;
+  margin-right: 0;
+}
+.prose-vbweb img[data-align='center'] {
+  margin-left: auto;
+  margin-right: auto;
+}
+/* Selection visible (ProseMirror) — outline cyan autour de l'image active */
+.prose-vbweb .ProseMirror-selectednode {
+  outline: 2px solid var(--primary, #4FC3F7);
+  outline-offset: 3px;
 }
 
 /* CSS print : PDF identique au rendu, sans contrôles d'admin */

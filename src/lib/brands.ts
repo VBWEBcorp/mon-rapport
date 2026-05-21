@@ -75,12 +75,12 @@ export function getBrand(id: BrandId | string | undefined): Brand {
 export const DOC_TYPES: Array<{ id: DocType; label: string; description: string }> = [
   {
     id: 'proposition',
-    label: 'Proposition commerciale',
+    label: 'Proposition',
     description: 'Offre détaillée pour un client (lots, tarifs, modalités)',
   },
   {
     id: 'synthese',
-    label: 'Synthèse SEO',
-    description: 'Audit ou bilan SEO structuré pour un client',
+    label: 'Synthèse',
+    description: 'Audit, bilan ou rapport structuré (SEO, perf, contenu, etc.)',
   },
 ]

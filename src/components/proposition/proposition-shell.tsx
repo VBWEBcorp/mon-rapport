@@ -1,5 +1,22 @@
+'use client'
+
+import { motion, type Variants } from 'framer-motion'
 import { getBrand, type BrandId } from '@/lib/brands'
 import { BrandLogo } from './brand-logo'
+
+const ease = [0.22, 1, 0.36, 1] as const
+
+const footerContainer: Variants = {
+  hidden: {},
+  visible: {
+    transition: { staggerChildren: 0.08, delayChildren: 0.25 },
+  },
+}
+
+const footerItem: Variants = {
+  hidden: { opacity: 0, y: 10 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease } },
+}
 
 export function PropositionShell({
   children,
@@ -8,6 +25,7 @@ export function PropositionShell({
   totalPages = 1,
   pageIndex = 1,
   brand = 'vbweb',
+  animate = false,
 }: {
   children: React.ReactNode
   client: string
@@ -15,33 +33,33 @@ export function PropositionShell({
   totalPages?: number
   pageIndex?: number
   brand?: BrandId
+  /** Active les animations d'entree (cote client public). Off dans l'editeur. */
+  animate?: boolean
 }) {
   const b = getBrand(brand)
+  const initial = animate ? 'hidden' : 'visible'
 
   return (
     <div data-brand={b.id} className="flex min-h-dvh flex-col bg-background">
       <main className="flex-1">{children}</main>
 
-      {/* Bandeau marine bas — miroir stylé du header */}
-      <footer
+      {/* Footer marine — miroir du header, fine bordure cyan en haut */}
+      <motion.footer
         data-pdf="footer"
+        variants={footerContainer}
+        initial={initial}
+        whileInView="visible"
+        viewport={{ once: true, margin: '0px 0px -80px 0px' }}
+        animate={animate ? undefined : 'visible'}
         className="relative mt-20 overflow-hidden bg-brand-marine text-brand-marine-foreground"
       >
-        <div
+        <span
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_60%_120%_at_15%_50%,rgba(255,255,255,0.10),transparent_60%)]"
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-1/2 bg-[linear-gradient(70deg,transparent_43%,rgba(255,255,255,0.04)_43%,rgba(255,255,255,0.04)_45%,transparent_45%)]"
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-primary/45"
         />
 
         <div className="relative mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-6 sm:px-8 sm:py-7">
-          <div className="flex items-center gap-3">
+          <motion.div variants={footerItem} className="flex items-center gap-3">
             <BrandLogo brand={b} className="h-10 w-auto opacity-95 sm:h-12" />
             {b.portraits && b.portraits.length > 0 ? (
               <div className="flex -space-x-2">
@@ -51,7 +69,7 @@ export function PropositionShell({
                     key={src}
                     src={src}
                     alt={`Portrait ${i + 1}`}
-                    className="size-10 rounded-full object-cover ring-2 ring-brand-marine sm:size-12"
+                    className="size-14 rounded-full object-cover ring-2 ring-brand-marine sm:size-16"
                     style={{ zIndex: b.portraits!.length - i }}
                   />
                 ))}
@@ -66,13 +84,19 @@ export function PropositionShell({
             >
               {b.website}
             </a>
-          </div>
+          </motion.div>
 
-          <p className="hidden text-[11px] uppercase tracking-[0.18em] text-brand-marine-foreground/70 md:block">
+          <motion.p
+            variants={footerItem}
+            className="hidden text-[11px] uppercase tracking-[0.18em] text-brand-marine-foreground/70 md:block"
+          >
             Document confidentiel · {client}
-          </p>
+          </motion.p>
 
-          <div className="flex flex-col items-end gap-0.5 text-right">
+          <motion.div
+            variants={footerItem}
+            className="flex flex-col items-end gap-0.5 text-right"
+          >
             {number ? (
               <p className="font-display text-sm font-semibold tracking-tight">
                 {number}
@@ -84,9 +108,9 @@ export function PropositionShell({
             >
               Page {pageIndex} / {totalPages}
             </p>
-          </div>
+          </motion.div>
         </div>
-      </footer>
+      </motion.footer>
     </div>
   )
 }

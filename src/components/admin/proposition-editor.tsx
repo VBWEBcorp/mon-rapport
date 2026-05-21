@@ -5,9 +5,11 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft,
+  Camera,
   Check,
   ChevronDown,
   ChevronUp,
+  ClipboardPaste,
   Copy,
   Download,
   ExternalLink,
@@ -22,7 +24,11 @@ import {
 } from 'lucide-react'
 
 import { EditorToolbar } from '@/components/admin/editor-toolbar'
-import { InlineEditor } from '@/components/admin/inline-editor'
+import {
+  InlineEditor,
+  markdownToHtml,
+  uploadImageFile,
+} from '@/components/admin/inline-editor'
 import { PreviewModal } from '@/components/admin/preview-modal'
 import type { Editor } from '@tiptap/react'
 import { PropositionHero } from '@/components/proposition/proposition-hero'
@@ -49,6 +55,10 @@ export function PropositionEditor({
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [pdfState, setPdfState] = useState<'idle' | 'generating'>('idle')
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null)
+  // Mobile-only : state du bouton Coller + ref de l'input photo flottant
+  const [mobilePasting, setMobilePasting] = useState(false)
+  const [mobileUploadingPhoto, setMobileUploadingPhoto] = useState(false)
+  const mobilePhotoInputRef = useRef<HTMLInputElement | null>(null)
   const lastSavedJson = useRef(JSON.stringify(initial))
 
   const dirty = useMemo(
@@ -162,6 +172,77 @@ export function PropositionEditor({
     }
   }
 
+  // Mobile : upload une image (presse-papier ou camera/galerie) vers R2 puis
+  // l'insere dans le contenu a la position du curseur. Sert pour la barre
+  // d'action flottante (Coller + Photo).
+  async function uploadAndInsertImage(file: File): Promise<void> {
+    if (!editorInstance) throw new Error('Editeur non pret')
+    const url = await uploadImageFile(file)
+    editorInstance.chain().focus().setImage({ src: url, alt: '' }).run()
+  }
+
+  // Mobile : tente de coller depuis le presse-papier.
+  // Priorite : image (capture d'ecran, photo) -> upload + insert
+  // Fallback : texte (potentiellement markdown) -> parse -> insert HTML
+  async function handleMobilePaste() {
+    if (!editorInstance) return
+    setErrorMsg(null)
+    setMobilePasting(true)
+    try {
+      const clip = navigator.clipboard as Clipboard & {
+        read?: () => Promise<ClipboardItem[]>
+      }
+      if (clip?.read) {
+        try {
+          const items = await clip.read()
+          for (const item of items) {
+            const imgType = item.types.find((t) => t.startsWith('image/'))
+            if (imgType) {
+              const blob = await item.getType(imgType)
+              const ext = imgType.split('/')[1] || 'png'
+              const file = new File([blob], `paste.${ext}`, { type: imgType })
+              await uploadAndInsertImage(file)
+              return
+            }
+          }
+        } catch {
+          // permission denied / pas d'image -> on bascule sur le texte
+        }
+      }
+      if (navigator.clipboard?.readText) {
+        const text = await navigator.clipboard.readText()
+        if (text.trim()) {
+          const html = markdownToHtml(text)
+          editorInstance.chain().focus().insertContent(html).run()
+          return
+        }
+      }
+      setErrorMsg('Presse-papier vide')
+    } catch (e) {
+      setErrorMsg(
+        e instanceof Error
+          ? `Coller impossible : ${e.message}`
+          : 'Coller impossible'
+      )
+    } finally {
+      setMobilePasting(false)
+    }
+  }
+
+  async function handleMobilePhoto(file: File) {
+    setErrorMsg(null)
+    setMobileUploadingPhoto(true)
+    try {
+      await uploadAndInsertImage(file)
+    } catch (e) {
+      setErrorMsg(
+        e instanceof Error ? `Photo : ${e.message}` : 'Photo : erreur'
+      )
+    } finally {
+      setMobileUploadingPhoto(false)
+    }
+  }
+
   async function downloadPdf() {
     if (pdfState === 'generating') return // Anti double-clic
     setErrorMsg(null)
@@ -215,13 +296,32 @@ export function PropositionEditor({
         ])
       }
 
+      // Attend que toutes les images soient chargees (max 5s par image) sinon
+      // html2canvas capture une image vide ou cassee dans le PDF.
+      const imgs = Array.from(bodyEl.querySelectorAll<HTMLImageElement>('img'))
+      await Promise.race([
+        Promise.all(
+          imgs.map((img) =>
+            img.complete && img.naturalWidth > 0
+              ? Promise.resolve()
+              : new Promise((resolve) => {
+                  img.addEventListener('load', resolve, { once: true })
+                  img.addEventListener('error', resolve, { once: true })
+                })
+          )
+        ),
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+      ])
+
       // captureOpts utilise onclone pour modifier le DOM clone par html2canvas
       // (sans toucher au DOM visible). Force largeur 1024px + style header marine
       // sur la 1ere ligne des tableaux + hide thead vide.
       const FORCE_WIDTH = 1024
       const captureOpts = {
-        scale: 1, // 1 = lecture ecran standard (96 DPI), maximum de rapidite
+        scale: 4, // 4 = ~524 DPI sur A4 (210mm), nettete impression haut-de-gamme
         useCORS: true,
+        allowTaint: false,
+        imageTimeout: 15000,
         backgroundColor: '#ffffff',
         windowWidth: FORCE_WIDTH,
         logging: false,
@@ -230,6 +330,14 @@ export function PropositionEditor({
           clonedDoc.querySelectorAll<HTMLElement>('[data-pdf]').forEach((el) => {
             el.style.width = `${FORCE_WIDTH}px`
             el.style.maxWidth = `${FORCE_WIDTH}px`
+          })
+          // Filet de securite CORS : force crossOrigin sur TOUTES les images
+          // du clone avant rasterisation. Sans ca, les images R2 apparaissent
+          // en blanc dans le PDF (canvas tainted).
+          clonedDoc.querySelectorAll<HTMLImageElement>('img').forEach((img) => {
+            if (!img.hasAttribute('crossorigin')) {
+              img.setAttribute('crossorigin', 'anonymous')
+            }
           })
           // Patch tableaux : 1ere ligne en marine + texte blanc
           clonedDoc.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
@@ -273,12 +381,13 @@ export function PropositionEditor({
         },
       } as const
 
-      // 1. Capture du header (page 1 uniquement)
+      // 1. Capture du header (page 1 uniquement). On garde le canvas brut :
+      //    le passage en JPEG (avec qualite ajustable) se fait au moment du
+      //    build PDF, ce qui permet de retry a qualite plus basse si > 20 Mo.
       const headerCanvas = await html2canvas(headerEl, captureOpts)
-      const headerImg = headerCanvas.toDataURL('image/jpeg', 0.95)
 
       // 2. Pré-capture de tous les blocs (avec leurs hauteurs)
-      const blockSelector = 'h1, h2, h3, h4, h5, h6, p, ul, ol, table, blockquote, hr, pre'
+      const blockSelector = 'h1, h2, h3, h4, h5, h6, p, ul, ol, table, blockquote, hr, pre, img, figure'
       const blocks = Array.from(
         bodyEl.querySelectorAll<HTMLElement>(blockSelector)
       ).filter((el) => {
@@ -307,22 +416,38 @@ export function PropositionEditor({
       const footerProbe = await html2canvas(footerEl, captureOpts)
       const footerH = (footerProbe.height * pageWidth) / footerProbe.width
 
-      // Pré-capture de chaque bloc → image + hauteur en mm + tagName pour spacing
+      // Pré-capture de chaque bloc → canvas + hauteur en mm + tagName pour spacing.
+      // On stocke le canvas (pas la dataURL) pour pouvoir re-encoder en JPEG
+      // a differentes qualites si le PDF final depasse 20 Mo.
       type BlockMeta = {
-        img: string
+        canvas: HTMLCanvasElement
         h: number
         w: number
         tagName: string
         isHeading: boolean
+        align: 'left' | 'center' | 'right'
       }
       // Hauteur max qu'un bloc peut occuper sur une page (pour pas deborder le footer)
       const maxBlockHeight = pageHeight - footerH - 14 - 6 // = ~245mm
 
       const blockData: BlockMeta[] = []
       for (const block of blocks) {
+        // Pour les images : on lit l'attribut width et data-align pour respecter
+        // le redimensionnement / alignement choisi par l'utilisateur.
+        let widthRatio = 1
+        let align: 'left' | 'center' | 'right' = 'center'
+        if (block.tagName === 'IMG') {
+          const widthAttr = (block as HTMLImageElement).getAttribute('width')
+          if (widthAttr && widthAttr.endsWith('%')) {
+            widthRatio = Math.max(0.1, Math.min(1, parseInt(widthAttr, 10) / 100))
+          }
+          const alignAttr = (block as HTMLImageElement).getAttribute('data-align')
+          if (alignAttr === 'left' || alignAttr === 'right') align = alignAttr
+        }
+
         const c = await html2canvas(block, captureOpts)
-        let h = (c.height * contentWidth) / c.width
-        let w = contentWidth
+        let w = contentWidth * widthRatio
+        let h = (c.height * w) / c.width
         // Si le bloc serait plus grand que la page disponible : shrink isotrope
         if (h > maxBlockHeight) {
           const scale = maxBlockHeight / h
@@ -330,12 +455,12 @@ export function PropositionEditor({
           w = w * scale
         }
         blockData.push({
-          img: c.toDataURL('image/jpeg', 0.95),
+          canvas: c,
           h,
           tagName: block.tagName,
           isHeading: /^H[1-6]$/.test(block.tagName),
-          // Largeur effective (peut etre < contentWidth si bloc shrunk)
           w,
+          align,
         })
       }
 
@@ -349,8 +474,13 @@ export function PropositionEditor({
         // Après un titre : tassé (le contenu suit immédiatement)
         if (prevTagName === 'H1' || prevTagName === 'H2') return 1
         if (prevTagName === 'H3') return 1
-        // Avant un tableau / blockquote : un peu d'air
-        if (tagName === 'TABLE' || tagName === 'BLOCKQUOTE') return 4
+        // Avant un tableau / blockquote / image : un peu d'air
+        if (
+          tagName === 'TABLE' ||
+          tagName === 'BLOCKQUOTE' ||
+          tagName === 'IMG' ||
+          tagName === 'FIGURE'
+        ) return 4
         // Avant une liste : petit air
         if (tagName === 'UL' || tagName === 'OL') return 2.5
         // Standard entre paragraphes
@@ -397,89 +527,166 @@ export function PropositionEditor({
       ) as HTMLElement | null
       const originalText = pageCounter?.textContent ?? ''
 
-      const footerImgs: string[] = []
+      const footerCanvases: HTMLCanvasElement[] = []
       for (let p = 1; p <= virtualPages; p++) {
         if (pageCounter) {
           pageCounter.textContent = `Page ${p} / ${virtualPages}`
         }
         const c = await html2canvas(footerEl, captureOpts)
-        footerImgs.push(c.toDataURL('image/jpeg', 0.95))
+        footerCanvases.push(c)
       }
       // Restaure le texte original côté DOM
       if (pageCounter) pageCounter.textContent = originalText
 
-      // 5. Génération du PDF final
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-      let currentPage = 1
-
-      // Page 1 : header + footer[0]
-      pdf.addImage(headerImg, 'JPEG', 0, 0, pageWidth, headerH)
-      pdf.addImage(footerImgs[0], 'JPEG', 0, pageHeight - footerH, pageWidth, footerH)
-      let cursorY = topPage1
-      let prevTag: string | null = null
-
-      function nextPage() {
-        pdf.addPage()
-        currentPage++
-        // Pages 2+ : footer SEULEMENT (pas de header)
-        pdf.addImage(
-          footerImgs[currentPage - 1],
-          'JPEG',
-          0,
-          pageHeight - footerH,
-          pageWidth,
-          footerH
+      // 5. Génération du PDF final — encapsulée pour pouvoir retry a une
+      //    qualite JPEG plus basse si le blob depasse 20 Mo (limite LinkedIn).
+      //    Capture coute ~80% du temps : on garde les canvas et on re-export
+      //    seulement les dataURL JPEG. compress: true active zlib sur les
+      //    streams PDF (gain marginal mais gratuit).
+      const buildPdfBlob = (jpegQuality: number): Blob => {
+        const pdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'mm',
+          format: 'a4',
+          compress: true,
+        })
+        const headerImg = headerCanvas.toDataURL('image/jpeg', jpegQuality)
+        const footerImgs = footerCanvases.map((c) =>
+          c.toDataURL('image/jpeg', jpegQuality)
         )
-        cursorY = topOtherPages
-        prevTag = null
-      }
 
-      for (let i = 0; i < blockData.length; i++) {
-        const cur = blockData[i]
-        const next = cur.isHeading && i + 1 < blockData.length ? blockData[i + 1] : null
+        let currentPage = 1
+        pdf.addImage(headerImg, 'JPEG', 0, 0, pageWidth, headerH)
+        pdf.addImage(footerImgs[0], 'JPEG', 0, pageHeight - footerH, pageWidth, footerH)
+        let cursorY = topPage1
+        let prevTag: string | null = null
 
-        // Réserve d'espace : avant cur + cur.h (+ avant next + next.h si orphelin protégé)
-        const beforeCur = spaceBefore(cur.tagName, prevTag)
-        const reserve =
-          beforeCur +
-          cur.h +
-          (next ? spaceBefore(next.tagName, cur.tagName) + next.h : 0)
-
-        if (cursorY + reserve > bottomLimit) {
-          nextPage()
+        const nextPage = () => {
+          pdf.addPage()
+          currentPage++
+          pdf.addImage(
+            footerImgs[currentPage - 1],
+            'JPEG',
+            0,
+            pageHeight - footerH,
+            pageWidth,
+            footerH
+          )
+          cursorY = topOtherPages
+          prevTag = null
         }
 
-        cursorY += spaceBefore(cur.tagName, prevTag)
-        // Centre horizontalement si le bloc a ete shrunk (largeur < contentWidth)
-        const offsetX = sideMargin + (contentWidth - cur.w) / 2
-        pdf.addImage(cur.img, 'JPEG', offsetX, cursorY, cur.w, cur.h)
-        cursorY += cur.h
-        prevTag = cur.tagName
+        const xFor = (b: BlockMeta) => {
+          if (b.align === 'left') return sideMargin
+          if (b.align === 'right') return pageWidth - sideMargin - b.w
+          return sideMargin + (contentWidth - b.w) / 2
+        }
 
-        if (next) {
-          const beforeNext = spaceBefore(next.tagName, prevTag)
-          if (cursorY + beforeNext + next.h > bottomLimit) {
+        for (let i = 0; i < blockData.length; i++) {
+          const cur = blockData[i]
+          const next = cur.isHeading && i + 1 < blockData.length ? blockData[i + 1] : null
+
+          const beforeCur = spaceBefore(cur.tagName, prevTag)
+          const reserve =
+            beforeCur +
+            cur.h +
+            (next ? spaceBefore(next.tagName, cur.tagName) + next.h : 0)
+
+          if (cursorY + reserve > bottomLimit) {
             nextPage()
           }
-          cursorY += spaceBefore(next.tagName, prevTag)
-          const nextX = sideMargin + (contentWidth - next.w) / 2
-          pdf.addImage(next.img, 'JPEG', nextX, cursorY, next.w, next.h)
-          cursorY += next.h
-          prevTag = next.tagName
-          i++
+
+          cursorY += spaceBefore(cur.tagName, prevTag)
+          pdf.addImage(
+            cur.canvas.toDataURL('image/jpeg', jpegQuality),
+            'JPEG',
+            xFor(cur),
+            cursorY,
+            cur.w,
+            cur.h
+          )
+          cursorY += cur.h
+          prevTag = cur.tagName
+
+          if (next) {
+            const beforeNext = spaceBefore(next.tagName, prevTag)
+            if (cursorY + beforeNext + next.h > bottomLimit) {
+              nextPage()
+            }
+            cursorY += spaceBefore(next.tagName, prevTag)
+            pdf.addImage(
+              next.canvas.toDataURL('image/jpeg', jpegQuality),
+              'JPEG',
+              xFor(next),
+              cursorY,
+              next.w,
+              next.h
+            )
+            cursorY += next.h
+            prevTag = next.tagName
+            i++
+          }
         }
+
+        return pdf.output('blob') as Blob
       }
 
-      const safeClient = (data.client || 'proposition')
+      // Adaptatif : on cible <= 20 Mo (limite upload LinkedIn).
+      // Etape 1 : q=0.93 -> visuellement identique a du PNG sur du texte a 524 DPI
+      // Etape 2 : q=0.82 -> compression plus agressive, encore tres propre sur photo+texte
+      // Etape 3 : q=0.7  -> fallback ; quasi indetectable a l'oeil sur du A4
+      const MAX_BYTES = 20 * 1024 * 1024
+      let pdfBlob = buildPdfBlob(0.93)
+      if (pdfBlob.size > MAX_BYTES) pdfBlob = buildPdfBlob(0.82)
+      if (pdfBlob.size > MAX_BYTES) pdfBlob = buildPdfBlob(0.7)
+
+      // Nom du fichier PDF — convention pro FR pour envoi client :
+      //   {V|B|O}-{P|S}-{JJ-MM-AAAA}-{Numéro}-{Client}.pdf
+      //   Ex : V-P-24-04-2026-N10-Micheline-Maximin.pdf
+      // - Lettre entite (V=VBWEB, B=BIMI, O=OUIBO) + lettre type (P/S)
+      //   identifiables d'un coup d'oeil dans le finder
+      // - Date au format FR (JJ-MM-AAAA) : lecture naturelle pour le client
+      // - Numero de reference (annee strippee car deja dans la date)
+      // - Client en fin pour tri/archivage par client cote destinataire
+      const brandLetter =
+        data.brand === 'bimi' ? 'B' : data.brand === 'ouibo' ? 'O' : 'V'
+      const typeLetter = data.docType === 'synthese' ? 'S' : 'P'
+      const dateFr = (() => {
+        const digits = (data.date || '').replace(/\D/g, '')
+        if (digits.length >= 8) {
+          const dd = digits.slice(0, 2)
+          const mm = digits.slice(2, 4)
+          const yyyy = digits.slice(4, 8)
+          return `${dd}-${mm}-${yyyy}`
+        }
+        const d = new Date()
+        const dd = String(d.getDate()).padStart(2, '0')
+        const mm = String(d.getMonth() + 1).padStart(2, '0')
+        return `${dd}-${mm}-${d.getFullYear()}`
+      })()
+      // N°2026-10 -> N10 : l'annee est deja dans la date ISO, inutile de la doubler
+      const safeNumber = (() => {
+        const raw = (data.number || '').replace(/[^a-z0-9-]+/gi, '')
+        const m = raw.match(/^N(\d{4})-(\d+)$/i)
+        return m ? `N${m[2]}` : raw
+      })()
+      const safeClient = (data.client || '')
+        .normalize('NFD')
+        .replace(/\p{Diacritic}/gu, '')
         .replace(/[^a-z0-9]+/gi, '-')
         .replace(/^-+|-+$/g, '')
-      const safeNumber = (data.number || '').replace(/[^a-z0-9-]+/gi, '')
-      const filename = `${safeClient}${safeNumber ? '_' + safeNumber : ''}.pdf`
+      const parts = [
+        brandLetter,
+        typeLetter,
+        dateFr,
+        safeNumber,
+        safeClient,
+      ].filter(Boolean)
+      const filename = `${parts.join('-')}.pdf`
 
       // Download via Blob explicite (plus fiable que pdf.save() qui peut etre
       // bloque par certaines popup-blockers ou contextes navigateur).
-      const blob = pdf.output('blob') as Blob
-      const url = URL.createObjectURL(blob)
+      const url = URL.createObjectURL(pdfBlob)
       const a = document.createElement('a')
       a.href = url
       a.download = filename
@@ -886,7 +1093,11 @@ export function PropositionEditor({
       <EditorToolbar editor={editorInstance} />
 
       {/* La proposition rendue exactement comme côté client */}
-      <main className="flex-1" id="proposition-printable">
+      <main
+        className="flex-1"
+        id="proposition-printable"
+        data-doc-type={data.docType}
+      >
         <PropositionShell
           brand={data.brand}
           client={data.client || 'Client'}
@@ -901,7 +1112,7 @@ export function PropositionEditor({
             clientLogoUrl={data.clientLogoUrl}
           />
 
-          <div data-pdf="body" className="mx-auto max-w-5xl px-4 pb-8 pt-12 sm:px-8 sm:pt-16">
+          <div data-pdf="body" className="mx-auto max-w-5xl px-4 pb-28 pt-12 sm:px-8 sm:pt-16 md:pb-8">
             <InlineEditor
               initialMarkdown={data.content}
               onChange={(md) => update('content', md)}
@@ -911,12 +1122,90 @@ export function PropositionEditor({
         </PropositionShell>
       </main>
 
+      {/* Barre d'actions flottante — MOBILE UNIQUEMENT (md:hidden).
+          Permet de coller depuis le presse-papier (texte ou image) ou
+          d'inserer une photo sans scroller vers la toolbar du haut.
+          pb safe-area gere le notch/home-indicator iOS. */}
+      <div
+        className="no-print fixed inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 px-2 pb-[calc(env(safe-area-inset-bottom,0)+0.5rem)] pt-2 backdrop-blur-xl md:hidden"
+        role="toolbar"
+        aria-label="Actions rapides mobile"
+      >
+        <div className="mx-auto flex max-w-sm items-stretch gap-1.5">
+          <button
+            type="button"
+            onClick={handleMobilePaste}
+            disabled={mobilePasting || !editorInstance}
+            className="flex h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Coller depuis le presse-papier"
+            title="Coller (texte ou image)"
+          >
+            {mobilePasting ? (
+              <Loader2 className="size-5 animate-spin" />
+            ) : (
+              <ClipboardPaste className="size-5" />
+            )}
+            <span className="text-[10px] font-semibold">Coller</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => mobilePhotoInputRef.current?.click()}
+            disabled={mobileUploadingPhoto || !editorInstance}
+            className="flex h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg border border-border/60 bg-card text-foreground/80 transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Insérer une photo"
+            title="Photo (caméra ou galerie)"
+          >
+            {mobileUploadingPhoto ? (
+              <Loader2 className="size-5 animate-spin" />
+            ) : (
+              <Camera className="size-5" />
+            )}
+            <span className="text-[10px] font-semibold">Photo</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => save(data)}
+            disabled={!dirty || saveState === 'saving'}
+            className="flex h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg border border-border/60 bg-card text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Enregistrer"
+            title="Enregistrer"
+          >
+            {saveState === 'saving' ? (
+              <Loader2 className="size-5 animate-spin" />
+            ) : saveState === 'saved' ? (
+              <Check className="size-5 text-emerald-600" />
+            ) : (
+              <Save className="size-5" />
+            )}
+            <span className="text-[10px] font-semibold">
+              {saveState === 'saving'
+                ? 'Sauve…'
+                : saveState === 'saved'
+                  ? 'OK'
+                  : 'Enregistrer'}
+            </span>
+          </button>
+        </div>
+        <input
+          ref={mobilePhotoInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) handleMobilePhoto(f)
+            e.currentTarget.value = ''
+          }}
+        />
+      </div>
+
       <PreviewModal
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
         src={`/propositions/${initial.slug}`}
         title={`Aperçu — ${data.client || 'Client'}`}
       />
+
     </div>
   )
 }

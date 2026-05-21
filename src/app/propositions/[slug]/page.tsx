@@ -55,5 +55,5 @@ export default async function PropositionPage({
       ? { ...prop, brand: brandOverride as BrandId }
       : prop
 
-  return <PropositionView data={data} />
+  return <PropositionView data={data} animate />
 }

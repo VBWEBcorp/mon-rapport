@@ -10,7 +10,8 @@ export interface JWTPayload {
 }
 
 export function generateToken(payload: Omit<JWTPayload, 'iat' | 'exp'>) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' })
+  // 365 jours : pour que la session tienne longtemps en cache (mobile + desktop)
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: '365d' })
 }
 
 export function verifyToken(token: string): JWTPayload | null {

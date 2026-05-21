@@ -2,6 +2,8 @@
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+import type { DocType } from '@/lib/brands'
 
 /**
  * Rendu markdown VBWEB — version premium :
@@ -10,11 +12,25 @@ import remarkGfm from 'remark-gfm'
  * - listes à puces accentuées en cyan
  * - tableaux avec en-tête marine, lignes alternées, hover
  * - blockquote avec guillemet décorative
+ *
+ * docType: les synthèses utilisent une taille de texte légèrement plus grosse
+ * (lecture longue/dense → +1px sur paragraphes, listes, blockquote).
  */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({
+  children,
+  docType = 'proposition',
+}: {
+  children: string
+  docType?: DocType
+}) {
+  const isSynthese = docType === 'synthese'
+  const bodyText = isSynthese
+    ? 'text-[17px] sm:text-[18px]'
+    : 'text-[16px] sm:text-[17px]'
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeRaw]}
       components={{
         h1: (props) => (
           <h1
@@ -42,7 +58,7 @@ export function Markdown({ children }: { children: string }) {
         ),
         p: (props) => (
           <p
-            className="mb-4 text-[15px] leading-[1.7] text-foreground/90 last:mb-0 sm:text-[16px]"
+            className={`mb-4 ${bodyText} leading-[1.7] text-foreground/90 last:mb-0`}
             {...props}
           />
         ),
@@ -52,20 +68,20 @@ export function Markdown({ children }: { children: string }) {
         em: (props) => <em className="italic text-foreground" {...props} />,
         ul: (props) => (
           <ul
-            className="mb-5 ml-1 space-y-2 text-[15px] leading-[1.65] text-foreground/90 sm:text-[16px] [&>li]:relative [&>li]:pl-6 [&>li]:before:absolute [&>li]:before:left-0 [&>li]:before:top-[0.6em] [&>li]:before:size-2 [&>li]:before:rounded-full [&>li]:before:bg-primary/80 [&>li]:before:ring-2 [&>li]:before:ring-primary/15"
+            className={`mb-5 ml-1 space-y-2 ${bodyText} leading-[1.65] text-foreground/90 [&>li]:relative [&>li]:pl-6 [&>li]:before:absolute [&>li]:before:left-0 [&>li]:before:top-[0.6em] [&>li]:before:size-2 [&>li]:before:rounded-full [&>li]:before:bg-primary/80 [&>li]:before:ring-2 [&>li]:before:ring-primary/15`}
             {...props}
           />
         ),
         ol: (props) => (
           <ol
-            className="mb-5 ml-5 list-decimal space-y-2 text-[15px] leading-[1.65] text-foreground/90 marker:font-semibold marker:text-primary sm:text-[16px]"
+            className={`mb-5 ml-5 list-decimal space-y-2 ${bodyText} leading-[1.65] text-foreground/90 marker:font-semibold marker:text-primary`}
             {...props}
           />
         ),
         li: (props) => <li {...props} />,
         blockquote: (props) => (
           <blockquote
-            className="my-6 rounded-xl border border-primary/20 bg-primary/[0.05] px-6 py-5 text-[15px] italic leading-[1.65] text-foreground/90 shadow-sm sm:text-[16px]"
+            className={`my-6 rounded-xl border border-primary/20 bg-primary/[0.05] px-6 py-5 ${bodyText} italic leading-[1.65] text-foreground/90 shadow-sm`}
             {...props}
           />
         ),
@@ -108,6 +124,43 @@ export function Markdown({ children }: { children: string }) {
         tr: (props) => (
           <tr className="even:bg-muted/30 hover:bg-primary/[0.04]" {...props} />
         ),
+        // eslint-disable-next-line @next/next/no-img-element
+        img: ({ src, alt, width, ...rest }) => {
+          // width: "50%" -> applique en inline style. data-align: gere
+          // l'alignement (left/center/right) via margin auto.
+          const widthStr = typeof width === 'string' ? width : undefined
+          const align =
+            (rest as Record<string, unknown>)['data-align'] === 'left'
+              ? 'left'
+              : (rest as Record<string, unknown>)['data-align'] === 'right'
+                ? 'right'
+                : 'center'
+          const marginStyle: React.CSSProperties =
+            align === 'left'
+              ? { marginLeft: 0, marginRight: 'auto' }
+              : align === 'right'
+                ? { marginLeft: 'auto', marginRight: 0 }
+                : { marginLeft: 'auto', marginRight: 'auto' }
+          return (
+            // eslint-disable-next-line @next/next/no-img-element
+            // crossOrigin="anonymous" : indispensable pour que html2canvas puisse
+            // rasteriser l'image dans le PDF sans tainter le canvas (CORS).
+            // Sans ça, les images R2 apparaissent en blanc dans le PDF.
+            <img
+              src={src as string}
+              alt={alt ?? ''}
+              crossOrigin="anonymous"
+              style={{
+                ...marginStyle,
+                ...(widthStr ? { width: widthStr } : { width: '100%' }),
+                display: 'block',
+                maxWidth: '100%',
+                height: 'auto',
+              }}
+              className="my-8 rounded-xl border border-border/40 shadow-sm"
+            />
+          )
+        },
       }}
     >
       {children}

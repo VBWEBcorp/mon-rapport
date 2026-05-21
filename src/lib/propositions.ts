@@ -124,12 +124,7 @@ Nous sommes disponibles pour ajuster le périmètre selon vos priorités afin de
 async function ensureSeed() {
   if (SEED_GUARD.ran) return
   SEED_GUARD.ran = true
-  // Seed UNIQUEMENT si la collection est totalement vide (première installation).
-  // On ne réinjecte JAMAIS l'exemple si l'utilisateur l'a supprimé/renommé après.
-  const total = await Proposition.estimatedDocumentCount()
-  if (total === 0) {
-    await Proposition.create(SEED_DATA)
-  }
+  // Seed désactivé : on ne réinjecte plus la proposition "exemple" même si la base est vide.
   // Migration idempotente : si des titres ##/### sont en MAJUSCULES (héritage), on les passe
   // en sentence case (1ère lettre majuscule, reste minuscule). Ne touche pas les titres déjà ok.
   await migrateAllCapsTitles()

@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
     if (r2Enabled) {
       // Upload vers Cloudflare R2
       url = await uploadToR2(finalBuffer, filename, contentType)
+      console.log('[upload] R2 OK ->', url)
     } else {
       // Fallback: stockage local
       const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
