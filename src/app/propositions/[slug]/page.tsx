@@ -14,8 +14,14 @@ export const dynamic = 'force-dynamic'
 const VALID_BRANDS: BrandId[] = ['vbweb', 'bimi', 'ouibo']
 
 export async function generateStaticParams() {
-  const slugs = await listPropositionSlugs()
-  return slugs.map((slug) => ({ slug }))
+  if (!process.env.MONGODB_URI) return []
+  try {
+    const slugs = await listPropositionSlugs()
+    return slugs.map((slug) => ({ slug }))
+  } catch (err) {
+    console.warn('generateStaticParams: DB unavailable at build time, skipping', err)
+    return []
+  }
 }
 
 export async function generateMetadata({
